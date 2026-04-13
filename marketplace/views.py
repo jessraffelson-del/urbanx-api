@@ -1,11 +1,13 @@
+import logging
 from rest_framework.decorators import action
-from rest_framework.response import Response
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from core.views import BaseModelViewSet
 from core.responses import APIResponse
 from .models import Product, Order
 from .serializers import ProductSerializer, OrderSerializer
+
+logger = logging.getLogger(__name__)
 
 
 class ProductViewSet(BaseModelViewSet):
@@ -46,19 +48,40 @@ class OrderViewSet(BaseModelViewSet):
             kwargs['many'] = True
         return super().get_serializer(*args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        logger.info(
+            f"Creating order - bulk: {isinstance(request.data, list)}"
+        )
+        response = super().create(request, *args, **kwargs)
+        logger.info("Order created successfully")
+        return response
+
     @action(detail=True, methods=['post'])
     def confirm(self, request, pk=None):
         order = self.get_object()
+        logger.info(f"Confirming order id={order.id} for {order.customer_email}")
+
         if order.status != 'pending':
+            logger.warning(
+                f"Failed to confirm order id={order.id} - status is {order.status}"
+            )
             return APIResponse.error(
                 message="Order cannot be confirmed",
                 errors=f"Cannot confirm order with status: {order.status}"
             )
+
         order.status = 'confirmed'
         product = order.product
         product.stock -= order.quantity
         product.save()
         order.save()
+
+        logger.info(
+            f"Order id={order.id} confirmed - "
+            f"product={product.name}, "
+            f"quantity={order.quantity}, "
+            f"remaining_stock={product.stock}"
+        )
 
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
